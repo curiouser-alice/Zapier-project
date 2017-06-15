@@ -1,0 +1,215 @@
+drop table #temp1
+drop table #temp2
+drop table #temp3
+
+Select [State], sum(cast(Units as float)) as units, sum(cast(Prescriptions as float)) as Rx, sum(cast(Dollars as float)) as Dollars 
+	, [CMS FUL Current Unit Price] as FUL, cast(null as float) as WtdAWPUnit, cast(null as float) as WtdWACUnit, cast(null as float) as NADAC
+	, cast(null as float) as MAC, cast(null as float) as [NEW FUL], [MS], PC2.Rx as RxOTC
+	, Al.NDC
+	into #temp1
+from [All2015] Al
+join PriceCheckPC..PC2Feb17 PC2
+on Al.NDC=PC2.[NDC Unformatted]
+where not(RT like 'I%')
+and cast(Units as float)>0
+and [Record ID]='FFSU'
+group by [State], MS, PC2.Rx, [CMS FUL Current Unit Price], Al.NDC
+
+Select sum(cast(Units as float)*cast([AWP Current Unit Price] as float))/sum(cast(Units as float)) as WtdAWPUnit
+	, sum(cast(Units as float)*cast([WAC Current Unit Price] as float))/sum(cast(Units as float)) as WtdWACUnit
+	, Al.NDC
+into #temp2
+from [All2015] Al
+join PriceCheckPC..PC2Feb17 PC2
+on Al.NDC=PC2.[NDC Unformatted]
+where cast(Units as float)>0
+group by Al.NDC
+
+update #temp1
+set WtdAWPUnit=#temp2.WtdAWPUnit
+from #temp1 join #temp2
+on #temp1.NDC=#temp2.NDC
+
+update #temp1
+set WtdWACUnit=#temp2.WtdWACUnit
+from #temp1 join #temp2
+on #temp1.NDC=#temp2.NDC
+
+/*
+update [FDB Medicaid]..[RMDP0_MEDICAID_PRICE]
+set MDPT_PRICE=null
+where MDPT_PRICE=0.0
+*/
+
+select NDC, MDPT_ID, max(MDPT_DATEC) as maxdate
+into #temp3
+from [FDB Medicaid]..[RMDP0_MEDICAID_PRICE]
+group by NDC, MDPT_ID
+order by MDPT_ID, NDC
+
+update #temp1
+set MAC=[MDPT_PRICE]
+from #temp1 join #temp3
+on #temp1.[State]=#temp3.MDPT_ID
+and #temp1.NDC=#temp3.NDC
+join [FDB Medicaid]..[RMDP0_MEDICAID_PRICE] fdb
+on #temp3.MDPT_ID=fdb.MDPT_ID
+and #temp3.NDC=fdb.NDC
+and #temp3.maxdate=fdb.MDPT_DATEC
+
+/*
+update [ACA FUL Feb 2017]
+set NDC2=NDC
+update PriceCheckPC..PC2Feb17
+set [NDC Unformatted]=left(NDC,5)+left(right(NDC,7),4)+right(NDC,2)
+*/
+
+update #temp1
+set [NEW FUL]=ACA.[ACA FUL]
+from #temp1 join [ACA FUL Feb 2017] ACA
+on #temp1.NDC=ACA.NDC2
+
+update #temp1
+set FUL=PC2.[CMS FUL Current Unit Price]
+from #temp1 join PriceCheckPC..PC2Mar16 PC2
+on #temp1.NDC=PC2.[NDC Unformatted]
+
+update #temp1
+set NADAC=N.[NADAC_Per_Unit]
+from #temp1 join NADAC..NADACFeb222017 N
+on #temp1.NDC=N.NDC
+
+select FUL, WtdWACUnit, WtdAWPUnit, t.NDC, Units, t.Rx, Dollars
+	, t.MS, t.RxOTC, [State], [Product Name], [GPI 14 - Name], t.NADAC, MAC, [NEW FUL]
+from #temp1 t join PriceCheckPC..PC2Feb17 PC2
+on t.NDC=PC2.[NDC Unformatted]
+--where t.MS in ('N','O','M')
+where t.MS='Y'
+and [State]='ME'
+order by [Product Name]
+
+/*
+update #temp1
+set MAC=NULL
+where MAC=0
+*/
+/*
+update #temp1
+set MAC=[CURRENT MAC PRICE]
+from #temp1 join [FDB Medicaid]..[ME MAC 2-2017b] ME
+on #temp1.NDC=ME.[NDC Unformatted]
+where #temp1.[State]='ME'
+*/
+/*
+update #temp1
+set MAC=OK.SMAC
+from #temp1 join PriceCheckPC..PC2Jul16 PC2
+on #temp1.NDC=PC2.[NDC Unformatted]
+join [FDB Medicaid]..[OK SMAC 2-2016] OK
+on PC2.[GPI 14 - Name]=OK.[GPI-14 Name]
+where #temp1.[State]='OK'
+*/
+/*
+update #temp1
+set MAC=OH.[Ohio Medicaid Rate]
+from #temp1 join [FDB Medicaid]..[OH MAC 4-2014] OH
+on #temp1.NDC=OH.NDC
+where #temp1.[State]='OH'
+*/
+/*
+select Drug_NDC, Drug_MAC
+into [TX MAC]
+from [TX MAC 5-2016]
+update [TX MAC]
+set Drug_MAC=TX.Drug_DEAC
+from [TX MAC] join [TX MAC 5-2016] TX
+on [TX MAC].Drug_NDC=TX.Drug_NDC
+where (cast(Drug_DEAC as float)<cast([TX MAC].Drug_MAC as float) or [TX MAC].Drug_MAC is null)
+update [TX MAC]
+set Drug_MAC=TX.Drug_WEAC
+from [TX MAC] join [TX MAC 5-2016] TX
+on [TX MAC].Drug_NDC=TX.Drug_NDC
+where cast(Drug_WEAC as float)<cast([TX MAC].Drug_MAC as float) or [TX MAC].Drug_MAC is null
+update [TX MAC]
+set Drug_MAC=TX.Drug_WHSE
+from [TX MAC] join [TX MAC 5-2016] TX
+on [TX MAC].Drug_NDC=TX.Drug_NDC
+where cast(Drug_WHSE as float)<cast([TX MAC].Drug_MAC as float) or [TX MAC].Drug_MAC is null
+*/
+/*
+update #temp1
+set MAC=[TX].[Drug_MAC]
+from #temp1 join [FDB Medicaid]..[TX MAC] TX
+on #temp1.NDC=TX.Drug_NDC
+where #temp1.[State]='TX'
+*/
+/*
+drop table MAMAC
+drop table #tempMA
+drop table #tempMA2
+select [GPI 14 - Name], min([AWP Current Unit Price]) as MinPrice, cast(null as float) as MAC
+into MAMAC
+from [PriceCheckPC]..[PC2Feb17]
+where [Inactive Date] is null
+group by [GPI 14 - Name]
+select [GPI 14 - Name], min([WAC Current Unit Price]) as MinPrice, cast(null as float) as MAC
+into #tempMA
+from [PriceCheckPC]..[PC2Feb17]
+where [Inactive Date] is null
+group by [GPI 14 - Name]
+update MAMAC
+set MinPrice=t.MinPrice
+from MAMAC join #tempMA t
+on MAMAC.[GPI 14 - Name]=t.[GPI 14 - Name]
+where cast(t.MinPrice as float)<cast(MAMAC.MinPrice as float)
+select [GPI 14 - Name], min([DP Current Unit Price]) as MinPrice, cast(null as float) as MAC
+into #tempMA2
+from [PriceCheckPC]..[PC2Feb17]
+where [Inactive Date] is null
+group by [GPI 14 - Name]
+update MAMAC
+set MinPrice=t.MinPrice
+from MAMAC join #tempMA2 t
+on MAMAC.[GPI 14 - Name]=t.[GPI 14 - Name]
+where cast(t.MinPrice as float)<cast(MAMAC.MinPrice as float)
+*/
+/*
+update #temp1
+set MAC=cast([MAMAC].[MinPrice] as float)*1.3
+from #temp1 join [PriceCheckPC]..[PC2Feb17] PC2
+on #temp1.NDC=PC2.[NDC Unformatted]
+join MAMAC
+on PC2.[GPI 14 - Name]=MAMAC.[GPI 14 - Name]
+where #temp1.[State]='MA'
+*/
+/*
+select * from MAMAC
+*/
+/*
+update #temp1
+set MAC=NE.[MAC_Price]
+from #temp1 join [PriceCheckPC]..PC2Aug16 PC2
+on #temp1.NDC=PC2.[NDC Unformatted]
+join [ACA FUL July 16] ACA
+on PC2.[NDC Unformatted]=ACA.NDC2
+join [FDB Medicaid]..[NE MAC 2-2016] NE
+on (ACA.Ingredient=NE.[Generic Name]
+and ACA.Strength=NE.Strength
+and ACA.Dosage=NE.Form
+and ACA.Route=NE.Route)
+where #temp1.[State]='NE'
+*/
+/*
+select FUL, WtdWACUnit, WtdAWPUnit, t.NDC, sum(Units) as Units, sum(t.Rx) as Rx, sum(Dollars) as Dollars
+	, t.MS, t.RxOTC, [Product Name], [GPI 14 - Name], t.NADAC, [NEW FUL]
+from #temp1 t join PriceCheckPC..PC2Jul16 PC2
+on t.NDC=PC2.[NDC Unformatted]
+where t.MS in ('Y')
+group by FUL, WtdWACUnit, WtdAWPUnit, t.NDC, t.MS, t.RxOTC, [Product Name], [GPI 14 - Name], t.NADAC, [NEW FUL]
+*/
+
+
+
+Sign up for free to join this conversation on GitHub. Already have an account? Sign in to comment
+Contact GitHub API Training Shop Blog About
+© 2017 GitHub, Inc. Terms Privacy Security Status Help
